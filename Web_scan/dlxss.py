@@ -10,17 +10,14 @@ import urllib.request
 from PyQt5.QtCore import pyqtSignal
 
 NAME, VERSION, AUTHOR = "Small Xss Scanner (DLXSS)", "1.0", "delo"
-# 用于 XSS 篡改参数值的字符（较小的集合 - 用于避免可能的 SQLi 错误）
+# 用于 XSS 篡改参数值的字符（用于避免可能的 SQLi 错误）
 SMALLER_CHAR_POOL = ('<', '>')
-# 用于 XSS 篡改参数值的字符（更大的集合）
+# 用于 XSS 篡改参数值的字符
 LARGER_CHAR_POOL = ('\'', '"', '>', '<', ';')
-# 提交类型
 GET, POST = "GET", "POST"
 # XSS 篡改中使用的随机前缀后缀长度
 PREFIX_SUFFIX_LENGTH = 5
-# 可选的 HTTP 标头名称
 COOKIE, UA, REFERER = "Cookie", "User-Agent", "Referer"
-# 连接超时（以秒为单位）
 TIMEOUT = 30
 # 在 DOM XSS 搜索之前使用的过滤正则表达式
 '''
@@ -71,7 +68,7 @@ REGULAR_PATTERNS = (
     (r"<[^>]*%(chars)s[^>]*>", (), "\"<.xss.>\", inside the tag, outside of quotes, %(filtering)s filtering",
      r"(?s)<script.+?</script>|<!--.*?-->|=\s*'[^']*'|=\s*\"[^\"]*\""),
 )
-# 每个（dom 模式）项目由 r"recognition regex" 组成
+# 特殊函数指纹库
 DOM_PATTERNS = (
     r"(?s)<script[^>]*>[^<]*?(var|\n)\s*(\w+)\s*=[^;]*(document\.(location|URL|documentURI)|location\.("
     r"href|search)|window\.location)[^;]*;[^<]*(document\.write(ln)?\(|\.innerHTML\s*=|eval\(|setTimeout\("
@@ -81,7 +78,6 @@ DOM_PATTERNS = (
     r"href|search)|window\.location).*?</script>",
 )
 
-# 用于存储带有可选标头值的字典
 _headers = {}
 
 
@@ -97,18 +93,17 @@ def _retrieve_content(url, data=None):
         # 请求包请求并读取目标回显内容
         retval = urllib.request.urlopen(req, timeout=TIMEOUT).read()
     except Exception as ex:
-        # hasattr()判断对象是否包含对应的属性。如果对象有该属性返回 True，否则返回 False。
+        # 尝试获取请求失败的页面源码,否则获取报错信息
         retval = ex.read() if hasattr(ex, "read") else str(ex.args[-1])
-        # 判断retval对象是否包含decode属性，若包含则utf-8解码，否则置为空
     return (retval.decode("utf8", "ignore") if hasattr(retval, "decode") else "") or ""
 
 
 # 返回一个布尔值，保证content中包含所有chars中的元素，且确保chars的每个元素中至少有一个没有被转义（前面未加反斜杠）
 # 确定“必备未过滤的字符”是否有被过滤 原理是判断是否在字符前面存在\
 def _contains(content, chars):
-    # 去掉content中包含的被转义的chars
     # print(content)
     # print(chars)
+    # 去掉content中包含的被转义的chars
     content = re.sub(r"\\[%s]" % re.escape("".join(chars)), "", content) if chars else content
     # 在上一步去掉被转义的字符后，这里保证content中仍然包含chars中的所有元素
     return all(char in content for char in chars)
@@ -120,20 +115,18 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
     # 对未传入参数值的参数进行赋1操作
     url = re.sub(r"=(&|\Z)", "=1\g<1>", url) if url else url
     data = re.sub(r"=(&|\Z)", "=1\g<1>", data) if data else data
+
     '''Dom型XSS检测'''
-    # 先用_retrieve_content 请求url然后交与正则DOM_FILTER_REGEX
-    # r"(?s)<!--.*?-->|\bescape\([^)]+\)|\([^)]+==[^(]+\)|\"[^\"]+\"|'[^']+'"
-    # 首先根据dom_filter_regex去掉响应包中的内容（用于清除多余字符串如：单双引号内的内容，escape()函数,注释等）
-    original = re.sub(DOM_FILTER_REGEX, "", _retrieve_content(url, data)) # original的值就是排除干扰和外加因素后的网页回显内容
-    # DOM_PATTERNS 从响应体中正则判断是否存在 dom xss 可能性及在响应中查找dom_patterns（容易造成漏洞的功能函数或特殊函数），如果存在，则提示可能存在dom-xss
+    # original的值就是排除干扰和外加因素（多余字符串如：单双引号内的内容，escape()函数,注释等)后的网页回显内容
+    original = re.sub(DOM_FILTER_REGEX, "", _retrieve_content(url, data))
+    # print(original)
+
     # 因为dom型xss是js直接操作节点造成的所以js源码有能正则匹配的document\.write\(|\.innerHTML location setTimeout等
     # next() 返回迭代器的下一个项目。用于设置在没有下一个元素时返回该默认值，如果不设置，又没有下一个元素则会触发 StopIteration 异常
     dom = next(filter(None, (re.search(_, original) for _ in DOM_PATTERNS)), None)
-    # 如果匹配到了可能存在dom xss 并输出匹配的地方
     if dom:
         if not res_signal:
             print(" (i) page itself appears to be XSS vulnerable (DOM)")
-            # group(0)匹配的正则表达式整体结果
             print("  (o) ...%s..." % dom.group(0))
         else:
             res_signal.emit(" (i) page itself appears to be XSS vulnerable (DOM)")
@@ -144,15 +137,12 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
     try:
         for phase in (GET, POST):
             current = url if phase is GET else (data or "")
-            # get的话 current就是url
-            # 解析url的parameter 参数
+
             # 将参数和参数值提取出来：大概的意思是匹配以?或&开头的，然后匹配parameter和value，其中parameter为不匹配以下划线_开头的字符串，其中字符串为[a-zA-Z0-9_],value为不包含&和#的字符串
             '''
             \A 输入（input）的开始位置（表示仅匹配字符串开头）
             (?P<parameter>) 以parameter作为别名进行分组
-            [^_] 意思是匹配任何字符除了下划线
             \w 单词字符[a-zA-Z0-9_]
-            * 匹配0次或无数次
             '''
             for match in re.finditer(r"((\A|[?&])(?P<parameter>[\w\[\]]+)=)(?P<value>[^&#]*)", current):
                 # found为true时代表找到存在漏洞的参数；usable为true代表url或post-data中存在键值对
@@ -166,31 +156,26 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                                   range(2))
                 # print(prefix)
                 # print(suffix)
-                # SMALLER_CHAR_POOL    = ('<', '>')
-                # LARGER_CHAR_POOL     = ('\'', '"', '>', '<', ';')
+
                 # 然后使用一个for循环，针对larger_char_pool和smaller_char_pool进行单独的测试.之所以要用两个list的原因是防止后端使用
                 # waf/ids时对payload进行拦截，所以使用了一个smaller_payload来避免过于明显的payload[即有较少的特殊字符]）也防止sql注入误报 。
                 for pool in (LARGER_CHAR_POOL, SMALLER_CHAR_POOL):
-                    # found默认就是False
                     if not found:
                         # 将参数改为 参数加 前缀+LARGER_CHAR_POOL+后缀 就是判断 <> 是否过滤
-                        # payload格式为prefix+larger_pool中所有字符的随机排序+suffix
-                        # 例：1'hjref>;'"<zyftg
+                        # payload格式为prefix+larger_pool中所有字符的随机排序+suffix 例：1'hjref>;'"<zyftg
                         tampered = current.replace(match.group(0), "%s%s" % (match.group(0), urllib.parse.quote(
                             "%s%s%s%s" % (
                                 # 加一个‘的原因：
-                                # 1) .试图触发xss
-                                # 2) .故意构造一个错误的sql语句用于报错，试图在报错信息中寻找触发点
+                                # 1.试图触发xss
+                                # 2.故意构造一个错误的sql语句用于报错，试图在报错信息中寻找触发点
                                 "'" if pool == LARGER_CHAR_POOL else "", prefix,
                                 "".join(random.sample(pool, len(pool))),
                                 suffix))))
-                        # 替换后的新的url
-                        # 发起请求获取响应体 content
+                        # 替换后的新的url发起请求获取响应体 content
                         content = (_retrieve_content(tampered, data) if phase is GET else _retrieve_content(url,
                                                                                                             tampered)).replace(
                             "%s%s" % ("'" if pool == LARGER_CHAR_POOL else "", prefix), prefix)  # replace的作用是将回显内容中的单引号去掉，防止干扰后面的判断
-                        # 查找之前传入的随机字符串匹配看是否被过滤 <> 找到后输出 并清除匹配的相关字符串
-                        # 只是根据位置来判断 输出利用方式
+                        # 定位并匹配九种利用方式
                         for regex, condition, info, content_removal_regex in REGULAR_PATTERNS:
                             # 替换返回包中的需要去除的内容防止误判及清除匹配的相关字符串
                             filtered = re.sub(content_removal_regex or "", "", content)

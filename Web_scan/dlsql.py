@@ -12,24 +12,19 @@ from PyQt5.QtCore import pyqtSignal
 
 NAME, VERSION, AUTHOR = "Small SQLi Scanner (DLSQL)", "1.0", "delo"
 # 用于构建测试盲注有效载荷的前缀值
-PREFIXES = (" ", ") ", "' ", "') ", "\" ")
+PREFIXES = (" ", ") ", "' ", "') ", "\" ", "\") ")
 # 用于构建测试盲注有效载荷的后缀值
-SUFFIXES = ("", "-- -", "#", "%%16", "--+")
+SUFFIXES = ("", "-- -", "#", "--+")
 # 用于 SQL 篡改参数值中毒的字符,匹配特殊字符
 TAMPER_SQL_CHAR_POOL = ('(', ')', '\'', '"')
 # 用于构建测试盲有效载荷的布尔测试
 BOOLEAN_TESTS = ("AND %d=%d", "OR NOT (%d>%d)")
-# 可选的 HTTP 标头名称
 COOKIE, UA, REFERER = "Cookie", "User-Agent", "Referer"
-# 提交类型
 GET, POST = "GET", "POST"
-# 用于标记内容类型的类似枚举器的值
 TEXT, HTTPCODE, TITLE, HTML = range(4)
 # 范围 (0,1) 中的比率值，用于区分 True 和 False 响应
 FUZZY_THRESHOLD = 0.95
-# 连接超时（以秒为单位）
 TIMEOUT = 30
-# 在所有测试中使用的随机整数值
 RANDINT = random.randint(1, 255)
 # 用于识别通用防火墙阻止消息的正则表达式：可定制国内的防火墙关键字
 BLOCKED_IP_REGEX = r"(?i)(\A|\b)IP\b.*\b(banned|blocked|bl(a|o)ck\s?list|firewall)"
@@ -63,31 +58,26 @@ def _retrieve_content(url, data=None):
             "".join(url[_].replace(' ', "%20") if _ > url.find('?') else url[_] for _ in range(len(url))),
             # data必须是bytes(字节流）类型，如果是字典，可以用urllib.parse模块里的urlencode()编码，'ignore' 忽略无法编码的字符
             data.encode("utf8", "ignore") if data else None,
-            # 判断是否存在_header字典，不存在返回空{} ，然后去请求，返回请求后的html_content。
+            # 判断是否存在_header字典，不存在返回空{}
             globals().get("_headers", {}))
         # 请求读取目标url内容
         retval[HTML] = urllib.request.urlopen(req, timeout=TIMEOUT).read()
     except Exception as ex:
-        #  获取失败的Response code：getattr()返回一个对象属性值。此处返回ex对象的属性code的值若code没有则返回后面的指定值none
+        #  获取失败的Response code
         retval[HTTPCODE] = getattr(ex, "code", None)
-        # 尝试获取请求失败的页面源码,否则获取报错信息：hasattr()判断对象是否包含对应的属性。如果对象有该属性返回 True，否则返回 False。
+        # 尝试获取请求失败的页面源码,否则获取报错信息
         retval[HTML] = ex.read() if hasattr(ex, "read") else str(ex.args[-1])
-    # 判断retval[HTML]对象是否包含decode属性，若包含则utf-8解码，否则置为空
     retval[HTML] = (retval[HTML].decode("utf8", "ignore") if hasattr(retval[HTML], "decode") else "") or ""
     # 寻找retval[HTML]对象中是否存在防火墙关键字，若是则将retval[HTML]网页源码对象置空
     retval[HTML] = "" if re.search(BLOCKED_IP_REGEX, retval[HTML]) else retval[HTML]
     # print "替换前"
     # print retval[HTML]
+
     #  匹配and RANDINT ，其中and RANDINT中间不能有<号，如果匹配到则把匹配到的替换成__REFLECTED__
-    '''
-    (?i) 是不区分大小写的意思
-    [^...]	不在[]中的字符：[^abc] 匹配除了a,b,c之外的字符。
-    (ab)  将括号中字符作为⼀个分组
-    re*	匹配0个或多个的表达式。
-    '''
     retval[HTML] = re.sub(r"(?i)[^>]*(AND|OR)[^<]*%d[^<]*" % RANDINT, "__REFLECTED__", retval[HTML])
     # print '替换后'
     # print retval[HTML]
+
     # 查看页面源码中有无title标签：匹配标题,并且标题中不能出现<号
     match = re.search(r"<title>(?P<result>[^<]+)</title>", retval[HTML], re.I)
     retval[TITLE] = match.group("result") if match and "result" in match.groupdict() else None
@@ -107,15 +97,12 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
     # print(data)
     try:
         for phase in (GET, POST):
-            # 若是get型则current=url否则就是post型current=data or 空
             original, current = None, url if phase is GET else (data or "")
             # 将参数和参数值提取出来：大概的意思是匹配以?或&开头的，然后匹配parameter和value，其中parameter为不匹配以下划线_开头的字符串，其中字符串为[a-zA-Z0-9_],value为不包含&和#的字符串
             '''
             \A 表示仅匹配字符串开头
             (?P<parameter>) 以parameter作为别名进行分组
-            [^_] 意思是匹配任何字符除了下划线
             \w 单词字符[a-zA-Z0-9_]
-            * 匹配0次或无数次
             '''
             for match in re.finditer(r"((\A|[?&])(?P<parameter>[^_]\w*)=)(?P<value>[^&#]+)", current):
                 # print(match)
@@ -124,7 +111,7 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                     print("* scanning %s parameter '%s'" % (phase, match.group("parameter")))
                 else:
                     res_signal.emit("* scanning %s parameter '%s'" % (phase, match.group("parameter")))
-                # 进入了_retrieve_content()函数，or 后面的这段理解起来就是 如果是GET方式，就返回_retrieve_content(current, data) ，而这里的current为url，data为None
+                # 如果是GET方式，就返回_retrieve_content(current, data) ，而这里的current为url，data为None
                 # 如果是POST方式：返回_retrieve_content(url, current) 这里的url是url，而current为POST_Body，也就是POST过来的数据。
                 # 第一次请求：正常请求
                 original = original or (
@@ -133,13 +120,11 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                 # print(original)
 
                 ###### 报错注入测试 ######
-                # 篡改参数:给参数添加额外的随机值，url编码额外的随机值  随机值在这四个字符 TAMPER_SQL_CHAR_POOL = ('(', ')', '\'', '"') %22%28%29%27
-                # urllib.parse.quote url编码
-                # 加载payload后的url   id=1 篡改后可能为id=1"()' 每次都会有这4个字符,只不过位置是随机的,且字符是经过url编码的
+                # 篡改url中的参数:给参数添加额外的随机值，url编码额外的随机值:id=1"()'
                 tampered = current.replace(match.group(0), "%s%s" % (match.group(0), urllib.parse.quote(
-                    # random.sample的用法，多用于截取列表的指定长度的随机数
                     "".join(random.sample(TAMPER_SQL_CHAR_POOL, len(TAMPER_SQL_CHAR_POOL))))))
                 # print(tampered)
+
                 # 第二次请求：添加随机字符编码payload后的请求
                 content = _retrieve_content(tampered, data) if phase is GET else _retrieve_content(url, tampered)
                 # 大概就是轮训每个value，将key对应轮训的value。
@@ -157,7 +142,7 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                         retval = vulnerable = True
                 vulnerable = False
                 ###### 布尔注入测试 ######
-                # 生成payload，总的是32个组合,64个
+                # 生成payload，总的是6*2*4=48个组合,48*2=96
                 for prefix, boolean, suffix, inline_comment in itertools.product(PREFIXES, BOOLEAN_TESTS, SUFFIXES,
                                                                                  (False, True)):
                     if not vulnerable:
@@ -167,24 +152,24 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                         # print "template:--------"
                         # print template
                         # print '-----------------'
+
                         # 给template 赋随机的数字然后url编码（对%不编码），接着再次分and 1=1 和and 1=2 然后添加到url参数中，
-                        # 并标记False和True，到现在总的payload有120个
+                        # 并标记False和True，到现在总的payload有96*2=192个
                         payloads = dict((_, current.replace(match.group(0), "%s%s" % (match.group(0),
                                                                                       urllib.parse.quote(template % (
                                                                                           RANDINT if _ else RANDINT + 1,
                                                                                           RANDINT), safe='%')))) for _
                                         in
                                         (True, False))
+                        # 第三次请求
                         # 带着and 1=1 和 and 1=2 类似的payload去请求返回contents，其中and 1=1是contents[True]， and 1=2是contents[False]
                         contents = dict((_, _retrieve_content(payloads[_], data) if phase is GET else _retrieve_content(
                             url, payloads[_])) for _ in (False, True))
-                        # 第一种判断逻辑,用HTTPCODE或TITLE作为依据来判断
-                        # 看三个content的返回状态值。如果三次请求中有个状态值大于500就返回False
-                        # http.client.INTERNAL_SERVER_ERROR = 500
+
+                        # 精准判断：用HTTPCODE或TITLE作为依据来判断
+                        # 看三个content的返回状态值。如果三次请求中有个状态值大于500就返回False（http.client.INTERNAL_SERVER_ERROR = 500）
                         if all(_[HTTPCODE] and _[HTTPCODE] < http.client.INTERNAL_SERVER_ERROR for _ in
                                (original, contents[True], contents[False])):
-                            # 判断大概是下面两个，满足其一就代表有注入，通过状态码的不同和标题的不同来判断，也就是正常请求和and 1=1 的请
-                            # 求的状态码一样和 1=2 的状态码不一样，还有正常请求和and 1=1 的TITLE一样，和和 1=2不一样。
                             if any(original[_] == contents[True][_] != contents[False][_] for _ in (HTTPCODE, TITLE)):
                                 vulnerable = True
 
@@ -203,7 +188,6 @@ def scan_page(url, res_signal: pyqtSignal(str), data=None):
                                 vulnerable = all(ratios.values()) and min(ratios.values()) < FUZZY_THRESHOLD < max(
                                     ratios.values()) and abs(ratios[True] - ratios[False]) > FUZZY_THRESHOLD / 10
                         if vulnerable:
-                            # 盲注测试
                             if not res_signal:
                                 print(" (i) %s parameter '%s' appears to be blind SQLi vulnerable (e.g.: '%s')" % (
                                     phase, match.group("parameter"), payloads[True]))
@@ -243,7 +227,7 @@ def sql_main(url, res_signal: pyqtSignal(str), **kwargs):
     cookie = kwargs.get("cookie", None)
 
     init_options(proxy, cookie, ua, referer)
-    result = scan_page(url if url.startswith("http") else "http://%s" % url, res_signal, data)
+    result = scan_page(url if url.startswith("http") else "%http://s" % url, res_signal, data)
     print("\nscan results: %s vulnerabilities found" % ("possible" if result else "no"))
     res_signal.emit("\nscan results: %s vulnerabilities found" % ("possible" if result else "no"))
     res_signal.emit('end of sql scan ! ')

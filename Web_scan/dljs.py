@@ -13,16 +13,18 @@ import urllib.parse
 import urllib.request
 from PyQt5.QtCore import pyqtSignal
 
-NAME, VERSION, AUTHOR, COMMENT = "Small SQLi Scanner (DLSQL)", "1.0", "delo", "(https://bekk.github.io/retire.js/)"
+NAME, VERSION, AUTHOR, COMMENT = "Small JS Scanner (DLJS)", "1.0", "delo", "(https://bekk.github.io/retire.js/)"
 COOKIE, UA, REFERER = "Cookie", "User-Agent", "Referer"  # optional HTTP header names
-TIMEOUT = 30  # connection timeout in seconds
-RETIRE_JS_DEFINITIONS = "https://raw.githubusercontent.com/retirejs/retire.js/master/repository/jsrepository.json"  # Retire.JS definitions
+TIMEOUT = 30
+# 字典
+RETIRE_JS_DEFINITIONS = "https://raw.githubusercontent.com/retirejs/retire.js/master/repository/jsrepository.json"
 # 定义中的 Retire.JS 版本标记
-RETIRE_JS_VERSION_MARKER = u"(\xa7\xa7version\xa7\xa7)"  # Retire.JS version marker inside definitions
+RETIRE_JS_VERSION_MARKER = u"(\xa7\xa7version\xa7\xa7)"
 
 # 忽略过期和/或自签名证书
-ssl._create_default_https_context = ssl._create_unverified_context  # ignore expired and/or self-signed certificates
-_headers = {}  # used for storing dictionary with optional header values
+ssl._create_default_https_context = ssl._create_unverified_context
+_headers = {}
+
 
 # 请求页面
 def _retrieve_content(url, data=None):
@@ -69,12 +71,14 @@ def scan_page(url, res_signal: pyqtSignal(str)):
         for match in re.finditer(r"<script[^>]+src=['\"]?([^>]+.js)\b", content):
             # 组成绝对路径=url+js的相对路径
             script = urllib.parse.urljoin(url, match.group(1))
+            print(script)
             if script not in scripts:
                 _ = _retrieve_content(script)
                 if _:
-                    scripts[script] = _ # script是url，_是请求的回显内容
+                    scripts[script] = _  # script是url，_是请求的回显内容
                     # hashlib.sha1(_.encode("utf8")).hexdigest()是一个hash加密
                     hashes[hashlib.sha1(_.encode("utf8")).hexdigest()] = script
+        print(scripts)
         if scripts:
             # 得到js漏洞字典
             definitions = _get_definitions()
@@ -85,17 +89,21 @@ def scan_page(url, res_signal: pyqtSignal(str)):
                     if re.search(_, script):
                         del scripts[script]
             # items()以列表返回可遍历的(键, 值) 元组数组：字典变成元组(键, 值)组成的列表
+            # library为js框架名，definition为对应的字典信息
             for library, definition in definitions.items():
                 version = None
+                # 通过对比字典hash值确定version
                 for item in definition["extractors"].get("hashes", {}).items():
                     if item[0] in hashes:
                         version = item[1]
+                # 通过字典中的filename，uri确定version
                 for part in ("filename", "uri"):
                     for regex in (_.replace(RETIRE_JS_VERSION_MARKER, "(?P<version>[^\s\"]+)") for _ in
                                   definition["extractors"].get(part, [])):
                         for script in scripts:
                             match = re.search(regex, script)
                             version = match.group("version") if match else version
+                # 通过字典中的filecontent确定version
                 for script, content in scripts.items():
                     for regex in (_.replace(RETIRE_JS_VERSION_MARKER, "(?P<version>[^\s\"]+)") for _ in
                                   definition["extractors"].get("filecontent", [])):
